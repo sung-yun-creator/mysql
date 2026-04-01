@@ -3,7 +3,6 @@ import MainLayout from '@/layouts/MainLayout.tsx';
 import Home from '@/pages/Home.tsx';
 import MemberPlan from "./pages/MemberPlan";
 import MemberProfile from "./pages/MemberProfile";
-import MemberRegister from "./pages/MemberRegister.tsx";
 import RewardExchange from "./pages/RewardExchange";
 import RewardPoint from "./pages/RewardPoint";
 import HistoryContent from "./pages/HistoryContent";
@@ -15,6 +14,10 @@ import WorkoutDashboard from "./pages/WorkoutDashboard.tsx";
 import SystemSelect from "./pages/SystemSelect.tsx";
 import SystemInsert from "./pages/SystemInsert.tsx";
 import SystemUpdate from "./pages/SystemUpdate.tsx";
+import RewardRankingMain from "./sections/RewardRankingMain.tsx";
+import RewardMall from "./pages/RewardMall.tsx";
+import MemberSignup from "./pages/MemberSignup.tsx";
+import RewardAchievement from "./pages/RewardAchievement.tsx";
 
 function App() {
   return (
@@ -27,7 +30,7 @@ function App() {
         <Route index element={<WorkoutDashboard />} />           {/* / */}
         <Route path="*" element={<div>404 Not Found</div>} />
       </Route>
-      <Route path="/workout/start" element={<MainLayout />}>
+      <Route path="/workout/start/:wor_id" element={<MainLayout />}>
         <Route index element={<WorkoutStart />} />           {/* / */}
         <Route path="*" element={<div>404 Not Found</div>} />
       </Route>
@@ -46,9 +49,21 @@ function App() {
       <Route path="/reward/point" element={<MainLayout />}>
         <Route index element={<RewardPoint />} />           {/* / */}
         <Route path="*" element={<div>404 Not Found</div>} />
-      </Route>      
-      <Route path="/member/register" element={<MainLayout />}>
-        <Route index element={<MemberRegister />} />           {/* / */}
+      </Route>  
+      <Route path="/reward/achievement" element={<MainLayout />}>
+        <Route index element={<RewardAchievement />} />     {/* / */}
+        <Route path="*" element={<div>404 Not Found</div>} />
+      </Route>  
+      <Route path="/reward/ranking" element={<MainLayout />}>
+        <Route index element={<RewardRankingMain />} />           {/* / */}
+        <Route path="*" element={<div>404 Not Found</div>} />
+      </Route>           
+      <Route path="/reward/mall" element={<MainLayout />}>
+        <Route index element={<RewardMall />} />           {/* / */}
+        <Route path="*" element={<div>404 Not Found</div>} />
+      </Route>       
+      <Route path="/member/signup" element={<MainLayout />}>
+        <Route index element={<MemberSignup />} />           {/* / */}
         <Route path="*" element={<div>404 Not Found</div>} />
       </Route>            
       <Route path="/member/profile/:part" element={<MainLayout />}>

@@ -11,10 +11,16 @@ import {
   getWorkoutPivot, getWorkoutPivotWithPlan, getWorkoutHistory, 
   getMenuPos,
   searchMenus,
-  getScripts} from './db.js';
+  getScripts,
+  getPoint,
+  getMember,
+  getAchievementList,
+  completeAchievementTransaction
+} from './db.js';
 import aiRouter from './routes/ai.js';
 import workoutRouter from './routes/workout.js';
 import systemRouter from './routes/system.js';
+import rewardRouter from './routes/reward.js';
 
 //=================================================================================================
 // 환경 변수 로드 & 서버 초기화
@@ -45,8 +51,9 @@ app.use(
 app.use(express.json());
 app.use("/api/member", memberRouter); // 라우터 등록
 app.use("/api/ai", aiRouter); // AI 라우터 등록
-app.use("/api/workout", workoutRouter); // 운동 라우터 등록
+app.use("/api/workout", workoutRouter); // AI 라우터 등록
 app.use("/api/system", systemRouter); // 시스템 라우터 등록
+app.use("/api/reward", rewardRouter); // 시스템 라우터 등록
 
 // 서버 시작
 let server: any;
@@ -107,7 +114,8 @@ app.get('/api/getMenus', async (req, res) => {
   let apiLogEntry = null;
   try {
     apiLogEntry = await Logger.logApiStart('GET /api/getMenus', []);
-    const data = await getMenus();
+    const { mem_id } = req.query as { mem_id: string };  
+    const data = await getMenus(mem_id);
     res.json({
       success: true,
       data: data,
@@ -170,6 +178,103 @@ app.get('/api/searchMenus', async (req, res) => {
     });
   }
 });
+
+
+// ========================================================================
+// [팀장님 전용] 보상 데이터 배달 주소 (추가된 부분)
+// ========================================================================
+
+// API: 메뉴 위치조회 
+// GET /api/get_menu_pos?page=메뉴페이지명
+// PARAMETER : page (선택) - 조회할 메뉴 페이지명 
+app.get('/api/getPoint', async (req, res) => {
+  let apiLogEntry = null;
+  try {
+    const { memberId, from, to } = req.query as { memberId: string; from: string; to: string };
+
+    if (!memberId || !from || !to) {
+      return res.status(400).json({ success: false, error: '필수 파라미터 누락' });
+    }
+
+    // [중요] Logger를 통해 쿼리 시작 기록
+    apiLogEntry = await Logger.logApiStart('GET /api/getPoint', [memberId, from, to]);
+
+    const pointData = await getPoint(memberId, from, to);
+    
+    res.json({
+      success: true,
+      data: pointData,
+      timestamp: new Date().toISOString()
+    });
+
+    // 성공 로그 기록
+    await Logger.logApiSuccess(apiLogEntry);
+  } catch (error) {
+    if (apiLogEntry) await Logger.logApiError(apiLogEntry, error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+app.get('/api/get_member', async (req, res) => {
+  let apiLogEntry = null;
+  try {
+    const { memberId } = req.query as { memberId: string };
+
+    if (!memberId) {
+      return res.status(400).json({ success: false, error: '회원 ID 누락' });
+    }
+
+    apiLogEntry = await Logger.logApiStart('GET /api/get_member', [memberId]);
+
+    const memberData = await getMember(memberId); // db.ts에서 배열 반환 중
+
+    if (!memberData || memberData.length === 0) {
+      return res.status(404).json({ success: false, error: '회원을 찾을 수 없습니다.' });
+    }
+
+    // [중요] db.ts의 getMember가 배열을 주므로 [0]번 객체만 넘겨줌
+    res.json({ 
+      success: true, 
+      data: memberData[0] 
+    });
+
+    await Logger.logApiSuccess(apiLogEntry);
+  } catch (error) {
+    if (apiLogEntry) await Logger.logApiError(apiLogEntry, error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+
+
+// "업적 리스트 좀 줘봐" 라고 하면 호출되는 주소
+app.get('/api/get_achievement_list', async (req, res) => {
+  try {
+    const { memberId } = req.query as { memberId: string };
+    const data = await getAchievementList(memberId);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+// API: 업적 달성 및 포인트 수령
+// POST /api/complete_achievement
+app.post('/api/complete_achievement', async (req, res) => {
+  try {
+    const { memberId, achievementId, rewardPoint } = req.body;
+    
+    if (!memberId || !achievementId) {
+      return res.status(400).json({ success: false, error: '회원 ID와 업적 ID가 필요합니다.' });
+    }
+
+    // 트랜잭션 함수 실행 (보상은 무조건 100P로 강제)
+    await completeAchievementTransaction(memberId, achievementId, rewardPoint || 100);
+    
+    res.json({ success: true, message: '업적 달성! 포인트가 지급되었습니다.' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
 
 
 //================================================================================================
@@ -349,5 +454,7 @@ function parseEpostXML(xml: string) {
   
   return results;
 }
+
+
 
 

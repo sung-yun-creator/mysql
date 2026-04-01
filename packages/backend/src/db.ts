@@ -1,5 +1,5 @@
 import mysql, { PoolConnection, RowDataPacket } from 'mysql2/promise';
-import { NavItem, NavSubItem, ColDesc, WorkoutRecord, ChartData, MenuPos, WorkoutHistory, Member, WorkoutDetail, MemberExists, Workout, BeneFun, Membership, Benefit, T_WORKOUT_RECORD, T_MEMBER, T_WORKOUT_DETAIL } from 'shared';
+import { NavItem, NavSubItem, ColDesc, WorkoutRecord, ChartData, MenuPos, WorkoutHistory, Member, WorkoutDetail, MemberExists, Workout, BeneFun, Membership, Benefit, T_WORKOUT_RECORD, T_MEMBER, T_WORKOUT_DETAIL, RankingItem, CurWorkoutRecord, Goods, PointHistory } from 'shared';
 import dotenv from 'dotenv';
 import Logger from './logger.js'
 
@@ -56,17 +56,36 @@ export async function closePool(): Promise<void> {
 }
 // 3. 원시 쿼리 실행 - SELECT (결과 반환)
 export async function select<T extends RowDataPacket = RowDataPacket>(
-  sql: string, 
+  sql: string,
   binds: any[] = []
 ): Promise<T[]> {
   let logEntry: any = null;
-  
+
   try {
     await initPool();
     logEntry = await Logger.logQueryStart(sql, binds);
     const [rows] = await pool!.query<T[]>(sql, binds);
-    await Logger.logQuerySuccess(logEntry, rows.length || 0);    
+    await Logger.logQuerySuccess(logEntry, rows.length || 0);
     return rows as T[];
+  } catch (error: any) {
+    await Logger.logQueryError(logEntry, error.message || error);
+    throw error;
+  }
+}
+// 3. 원시 쿼리 실행 - SELECT (결과 반환)
+export async function execute<T extends RowDataPacket = RowDataPacket>(
+  conn: PoolConnection,
+  sql: string,
+  binds: any[] = []
+): Promise<any> {
+  let logEntry: any = null;
+
+  try {
+    await initPool();
+    logEntry = await Logger.logQueryStart(sql, binds);
+    const result = await conn.execute<T[]>(sql, binds);
+    await Logger.logQuerySuccess(logEntry, (result as any).affectedRows || 0);
+    return result;
   } catch (error: any) {
     await Logger.logQueryError(logEntry, error.message || error);
     throw error;
@@ -120,24 +139,36 @@ ORDER BY NAV_ID, NAS_ID
 export const getSubMenus = async (P_NAV_ID: string = ''): Promise<NavSubItem[]> => {
   const records = await _getSubMenus(P_NAV_ID);
   // 1단계: 메뉴 객체 생성
-  return records.map((record: any) => ({      
+  return records.map((record: any) => ({
     NAS_ID: record.NAS_ID,
     NAS_NAME: record.NAS_NAME || '',
     NAS_HREF: record.NAS_HREF || '',
     NAS_DESC: record.NAS_DESC || ''
   }));
 }
-async function _getMenus(): Promise<any[]> {
-  return select(`
-SELECT  NAV_ID, 
-        NAV_NAME, 
-        NAV_IMG, 
-        NAV_DESC 
-FROM    T_NAV_ITEM
-`);
+async function _getMenus(mem_id: string): Promise<any[]> {
+  if (!mem_id) {
+    return select(`
+      SELECT  NAV_ID, 
+              NAV_NAME, 
+              NAV_IMG, 
+              NAV_DESC 
+      FROM    T_NAV_ITEM
+      WHERE   NAV_ID = 'NAV09999'      
+      `);
+  }
+  else {
+    return select(`
+      SELECT  NAV_ID, 
+              NAV_NAME, 
+              NAV_IMG, 
+              NAV_DESC 
+      FROM    T_NAV_ITEM
+      `);
+  }
 }
-export const getMenus = async (): Promise<NavItem[]> => {
-  const records = await _getMenus();
+export const getMenus = async (mem_id: string): Promise<NavItem[]> => {
+  const records = await _getMenus(mem_id);
   // 1단계: NavItem[]로 변환 (map 사용!)
   let menus: NavItem[] = records.map((record: any) => ({
     NAV_ID: record.NAV_ID,
@@ -189,7 +220,7 @@ export const getMenuPos = async (P_NAS_PAGE: string = ''): Promise<any> => {
 }
 async function _searchMenus(key: string = ''): Promise<any[]> {
   if (!key?.trim() || key.trim().length < 2) {
-    return [];  
+    return [];
   }
   const cleanKey = key.trim();
   return select(`
@@ -229,6 +260,7 @@ SELECT A.MEM_ID,
        A.MEM_POINT,
        A.MEM_EXP_POINT,
        A.MEM_LVL,
+       A.MEM_STREAK,
        A.MES_ID,
        B.MES_NAME,
        B.MES_FEE
@@ -256,47 +288,46 @@ export const getMember = async (P_MEM_ID: string): Promise<Member[]> => {
     MEM_POINT: records[0].MEM_POINT,
     MEM_EXP_POINT: records[0].MEM_EXP_POINT,
     MEM_LVL: records[0].MEM_LVL,
+    MEM_STREAK: records[0].MEM_STREAK,
     MES_ID: records[0].MES_ID,
     MES_NAME: records[0].MES_NAME,
     MES_FEE: records[0].MES_FEE
   }];
 }
 export const insertMember = async (P_MEM: T_MEMBER): Promise<{ MEM_ID: number, MEM_ID_VIEW: string }> => {
-    return await withTransaction(async (conn: PoolConnection) => {
-        
-        // 1. 회원 정보 최초 INSERT (MEM_ID_VIEW는 임시 빈 값)
-        const [insertResult] = await conn.execute(
-            `INSERT INTO T_MEMBER (
-                MEM_ID_VIEW, MEM_NAME, MEM_NICKNAME, MEM_PASSWORD, 
-                MEM_IMG, MEM_PNUMBER, MEM_EMAIL, MEM_SEX, 
-                MEM_AGE, MEM_POINT, MEM_EXP_POINT, MEM_LVL, MES_ID
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                P_MEM.MEM_ID_VIEW, 
-                P_MEM.MEM_NAME, 
-                P_MEM.MEM_NICKNAME ?? null, 
-                P_MEM.MEM_PASSWORD,
-                P_MEM.MEM_IMG ?? null, 
-                P_MEM.MEM_PNUMBER ?? null, 
-                P_MEM.MEM_EMAIL ?? null, 
-                P_MEM.MEM_SEX,
-                P_MEM.MEM_AGE, 
-                P_MEM.MEM_POINT, 
-                P_MEM.MEM_EXP_POINT, 
-                P_MEM.MEM_LVL, 
-                P_MEM.MES_ID
-            ] as any[] // ExecuteValues 타입 에러 방지용 캐스팅
-        );
+  return await withTransaction(async (conn: PoolConnection) => {
 
-        // 생성된 AUTO_INCREMENT ID (PK) 추출
-        const newId = (insertResult as any).insertId;
+    // 1. 회원 정보 최초 INSERT (MEM_ID_VIEW는 임시 빈 값)
+    const [Result] = await conn.execute(
+      `
+            CALL member_signup(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @p_result, @p_new_id)
+            `,
+      [
+        P_MEM.MEM_ID_VIEW,
+        P_MEM.MEM_NAME,
+        P_MEM.MEM_NICKNAME ?? null,
+        P_MEM.MEM_PASSWORD,
+        P_MEM.MEM_IMG ?? null,
+        P_MEM.MEM_PNUMBER ?? null,
+        P_MEM.MEM_EMAIL ?? null,
+        P_MEM.MEM_SEX,
+        P_MEM.MEM_AGE,
+        P_MEM.MES_ID
+      ] as any[] // ExecuteValues 타입 에러 방지용 캐스팅
+    );
 
-        // 4. 프라이머리 키(MEM_ID)와 생성된 시각적 ID 리턴
-        return { 
-            MEM_ID: newId, 
-            MEM_ID_VIEW: P_MEM.MEM_ID_VIEW
-        };
-    });
+    const [rows] = await conn.execute("SELECT @p_result AS result, @p_new_id AS newId");
+    // 생성된 AUTO_INCREMENT ID (PK) 추출
+    const newId = (rows as any)[0].newId;
+    const result = (rows as any)[0].result;
+    if (result !== 'SUCCESS') {
+      throw new Error(result === 'DUPLICATE_ID' ? '이미 존재하는 회원 ID입니다.' : '회원가입에 실패했습니다.');
+    }
+    return {
+      MEM_ID: newId,
+      MEM_ID_VIEW: P_MEM.MEM_ID_VIEW
+    };
+  });
 };
 async function _getWorkoutHistory(P_MEM_ID: string = ''): Promise<any> {
   return select(`
@@ -323,7 +354,7 @@ export const getWorkoutHistory = async (P_MEM_ID: string = ''): Promise<any> => 
   const result = await _getWorkoutHistory(P_MEM_ID);
   return result.length > 0 ? result[0].RESULT : null;
 }
-async function _getWorkoutDetails(P_WOR_ID: string): Promise<any[]> {
+async function _getWorkoutDetails(P_WOR_ID: number): Promise<any[]> {
   return select(`
     SELECT  B.WOO_ID, 
             B.WOO_NAME, 
@@ -337,40 +368,42 @@ async function _getWorkoutDetails(P_WOR_ID: string): Promise<any[]> {
     WHERE   A.WOR_ID = ?
     `, [P_WOR_ID]);
 }
-export const getWorkoutDetails = async (P_WOR_ID: string): Promise<WorkoutDetail[]> => {
+export const getWorkoutDetails = async (P_WOR_ID: number): Promise<WorkoutDetail[]> => {
   const records = await _getWorkoutDetails(P_WOR_ID);
   return records.map((record: any) => ({
-    WOO_ID : record.WOO_ID,
-    WOO_NAME : record.WOO_NAME,
-    WOO_IMG : record.WOO_IMG,
-    WOO_UNIT : record.WOO_UNIT,
-    WOD_GUIDE : record.WOD_GUIDE,
-    WOD_TARGET_REPS : record.WOD_TARGET_REPS,
-    WOD_TARGET_SETS : record.WOD_TARGET_SETS
+    WOO_ID: record.WOO_ID,
+    WOO_NAME: record.WOO_NAME,
+    WOO_IMG: record.WOO_IMG,
+    WOO_UNIT: record.WOO_UNIT,
+    WOD_GUIDE: record.WOD_GUIDE,
+    WOD_TARGET_REPS: record.WOD_TARGET_REPS,
+    WOD_TARGET_SETS: record.WOD_TARGET_SETS
   }));
 }
 async function _getWorkouts(): Promise<any> {
   return select(`
-SELECT	WOO_ID, 
-		    WOO_NAME, 
+SELECT  WOO_ID,
+        WOO_ID_VIEW,
+        WOO_NAME,
         WOO_IMG,
+        WOO_DESC,
         WOO_GUIDE,
         WOO_UNIT,
         WOO_TARGET_REPS,
         WOO_TARGET_SETS
-FROM	  T_WORKOUT
+FROM T_WORKOUT
 `, []);
 }
 export const getWorkouts = async (): Promise<Workout[]> => {
   const records = await _getWorkouts();
   return records.map((record: any) => ({
-    WOO_ID : record.WOO_ID,
-    WOO_NAME : record.WOO_NAME,
-    WOO_GUIDE : record.WOO_GUIDE,
-    WOO_IMG : record.WOO_IMG,
-    WOO_UNIT : record.WOO_UNIT,
-    WOO_TARGET_REPS : record.WOO_TARGET_REPS,
-    WOO_TARGET_SETS : record.WOO_TARGET_SETS
+    WOO_ID: record.WOO_ID,
+    WOO_NAME: record.WOO_NAME,
+    WOO_GUIDE: record.WOO_GUIDE,
+    WOO_IMG: record.WOO_IMG,
+    WOO_UNIT: record.WOO_UNIT,
+    WOO_TARGET_REPS: record.WOO_TARGET_REPS,
+    WOO_TARGET_SETS: record.WOO_TARGET_SETS
   }));
 }
 
@@ -386,7 +419,7 @@ async function _checkMember(P_MEM_ID_VIEW: string, P_MEM_PASSWORD: string): Prom
   const records = await select(`
   CALL member_login(?, ?)
 `, [P_MEM_ID_VIEW, P_MEM_PASSWORD]);
-  return records[0].length === 0 ? [] : 
+  return records[0].length === 0 ? [] :
     records[0].map((record: any) => ({
       MEM_ID: record.MEM_ID,
       MEM_ID_VIEW: record.MEM_ID_VIEW,
@@ -400,6 +433,7 @@ async function _checkMember(P_MEM_ID_VIEW: string, P_MEM_PASSWORD: string): Prom
       MEM_POINT: record.MEM_POINT,
       MEM_EXP_POINT: record.MEM_EXP_POINT,
       MEM_LVL: record.MEM_LVL,
+      MEM_STREAK: record.MEM_STREAK,
       MES_ID: record.MES_ID,
       MES_NAME: record.MES_NAME,
       MES_FEE: record.MES_FEE
@@ -407,18 +441,18 @@ async function _checkMember(P_MEM_ID_VIEW: string, P_MEM_PASSWORD: string): Prom
 }
 export const login = async (P_MEM_ID_VIEW: string, P_MEM_PASSWORD: string): Promise<MemberExists> => {
   const bool = await _isMember(P_MEM_ID_VIEW);
-  if(!bool) {
+  if (!bool) {
     return {
-      STATUS: "FAIL",  
+      STATUS: "FAIL",
       ERROR: '회원정보가 존재하지 않습니다.'
     };
   }
   const records = await _checkMember(P_MEM_ID_VIEW, P_MEM_PASSWORD);
-  if(!records || records.length === 0) {
+  if (!records || records.length === 0) {
     return {
-      STATUS: "FAIL",  
+      STATUS: "FAIL",
       ERROR: '비밀번호가 올바르지 않습니다.',
-    };  
+    };
   }
   else {
     return {
@@ -427,7 +461,23 @@ export const login = async (P_MEM_ID_VIEW: string, P_MEM_PASSWORD: string): Prom
       USER: records[0]
     };
   }
-} 
+}
+export const register = async (P_MEM: T_MEMBER): Promise<any> => {
+  try {
+    const result = await insertMember(P_MEM);
+    return {
+      STATUS: "SUCCESS",
+      ERROR: '',
+      DATA: result.MEM_ID,
+    }
+  } catch (error: any) {
+    return {
+      STATUS: "FAIL",
+      ERROR: error.message || '회원가입 중 오류가 발생했습니다.',
+    }
+  }
+}
+
 async function _getBenefits(P_MES_ID: string = ''): Promise<any[]> {
   return select(`
  SELECT B.BEN_ID, 
@@ -499,143 +549,447 @@ export const getScripts = async (tableNames: string[]): Promise<string> => {
     .filter(s => s.trim() !== "") // 실제 내용이 있는 스크립트만 남김
     .join('\n\n');
 };
-export const insertWorkoutRecord = async (P_REC: T_WORKOUT_RECORD): Promise<{ WOR_ID: number, WOR_ID_VIEW: string }> => {
-    return await withTransaction(async (conn) => {
-        // 1. 날짜 처리: 입력값이 없으면 현재 날짜(YYYY-MM-DD) 사용
-        const recordDate = P_REC.WOR_DT ?? new Date().toISOString().split('T')[0];
+async function _getRanking(from_dt: string = '', to_dt: string = ''): Promise<any[]> {
+  return select(`
+SELECT
+    ROW_NUMBER() OVER (ORDER BY B.CNT DESC) AS \`RANK\`,
+    A.MEM_ID,
+    A.MEM_NAME,
+    A.MEM_IMG,
+    B.CNT,
+    B.WORKOUT_TIME
+FROM T_MEMBER A
+JOIN (
+    SELECT
+        WR.MEM_ID,
+        COUNT(*)             AS CNT,
+        SUM(WD.WOD_TIME) AS WORKOUT_TIME
+    FROM T_WORKOUT_RECORD WR
+    JOIN T_WORKOUT_DETAIL WD
+        ON WD.WOR_ID = WR.WOR_ID
+    WHERE WR.WOR_DT >= ?
+      AND WR.WOR_DT <= ?
+    GROUP BY WR.MEM_ID
+) B
+    ON A.MEM_ID = B.MEM_ID
+ORDER BY B.CNT DESC
+`, [from_dt, to_dt]);
+}
+export const getRanking = async (from_dt: string = '', to_dt: string = ''): Promise<RankingItem[]> => {
+  const subMenus = await _getRanking(from_dt, to_dt);
+  return subMenus.map((sub: any) => ({
+    RANK: sub.RANK,
+    MEM_ID: sub.MEM_ID,
+    MEM_NAME: sub.MEM_NAME,
+    MEM_IMG: sub.MEM_IMG,
+    CNT: sub.CNT,
+    WORKOUT_TIME: sub.WORKOUT_TIME
+  }));
+}
+async function _getGoods(): Promise<any[]> {
+  return select(`
+SELECT  GOD_ID,
+        GOD_ID_VIEW,
+        GOD_NAME,
+        GOD_PRICE,
+        GOD_DCRATE,
+        GOD_IMG
+FROM T_GOODS
+`);
+}
+export const getGoods = async (): Promise<Goods[]> => {
+  const records = await _getGoods();
+  return records.map((record: any) => ({
+    GOD_ID: record.GOD_ID,
+    GOD_ID_VIEW: record.GOD_ID_VIEW,
+    GOD_NAME: record.GOD_NAME,
+    GOD_PRICE: record.GOD_PRICE,
+    GOD_DCRATE: record.GOD_DCRATE,
+    GOD_IMG: record.GOD_IMG
+  }));
+};
 
-        console.log("T_WORKOUT_RECORD을 생성합니다.");
-        // 2. 기본 정보 INSERT (WOR_ID_VIEW는 임시 빈 값)
-        const [insertResult] = await conn.execute(
-            `INSERT INTO T_WORKOUT_RECORD (WOR_ID_VIEW, MEM_ID, WOR_DT, WOR_DESC) 
-             VALUES (?, ?, ?, ?)`,
-            [
-                '', 
-                P_REC.MEM_ID, 
-                recordDate, 
-                P_REC.WOR_DESC
-            ] as any[]
-        );
-        // 생성된 AUTO_INCREMENT ID (PK: WOR_ID) 추출
-        const newAutoId = (insertResult as any).insertId;
+async function _getLatestWorkoutId(P_MEM_ID: number, P_WOR_DT: string): Promise<any> {
+  return select(`
+        SELECT WOR_ID, WOR_ID_VIEW
+        FROM  T_WORKOUT_RECORD
+        WHERE WOR_ID = (
+             SELECT MAX(WOR_ID)
+             FROM   T_WORKOUT_RECORD
+          WHERE  MEM_ID = ?
+          AND    WOR_DT = ?
+          AND    WOR_STATUS = 'N'
+      )  
+    `, [P_MEM_ID, P_WOR_DT]);
+}
+export const getLatestWorkoutId = async (
+  P_MEM_ID: number,
+  P_WOR_DT: string
+): Promise<CurWorkoutRecord> => {
+  const records = await _getLatestWorkoutId(P_MEM_ID, P_WOR_DT);
 
-        // 3. WOR_ID_VIEW 포맷 생성 (PREFIX_ + 5자리 숫자)
-        // 지시사항 규칙: WOR + 5자리 패딩 적용 (예: WOR_00001)
-        const formattedViewId = `WOR${String(newAutoId).padStart(5, '0')}`;
+  // 결과가 없거나 WOR_ID가 null인 경우 처리
+  if (records.length === 0 || records[0].WOR_ID === null) {
+    return {} as CurWorkoutRecord; // 빈 객체 반환 (필요에 따라 null로 변경 가능)}; 
+  }
+  return {
+    WOR_ID: records[0].WOR_ID,
+    WOR_ID_VIEW: records[0].WOR_ID_VIEW
+  };
+}
+export const insertWorkoutRecord = async (P_WOR: T_WORKOUT_RECORD): Promise<CurWorkoutRecord> => {
+  return await withTransaction(async (conn: PoolConnection) => {
+    // 1. 데이터 삽입 (WOR_ID_VIEW는 우선 빈 값으로 입력)
+    const [insertResult] = await execute(conn,
+      `
+            INSERT INTO T_WORKOUT_RECORD (WOR_ID_VIEW, MEM_ID, WOR_DT, WOR_DESC, WOR_STATUS) 
+            VALUES (?, ?, ?, ?, ?)
+            `,
+      [
+        '',
+        P_WOR.MEM_ID,
+        P_WOR.WOR_DT,
+        P_WOR.WOR_DESC,
+        "N" // 초기 상태는 'N'으로 설정 (예: 'N' = Not completed, 'C' = Completed)
+      ]
+    );
 
-        console.log("UPDATE 준비", newAutoId, formattedViewId);
-        // 4. 생성된 포맷으로 해당 행 업데이트
-        await conn.execute(
-            `UPDATE T_WORKOUT_RECORD SET WOR_ID_VIEW = ? WHERE WOR_ID = ?`,
-            [formattedViewId, newAutoId] as any[]
-        );
-        console.log("UPDATE 완료", newAutoId, formattedViewId);
+    const WOR_ID = (insertResult as any).insertId;
 
-        // 5. 프라이머리 키(WOR_ID)와 생성된 시각적 ID 리턴
-        return { 
-            WOR_ID: newAutoId, 
-            WOR_ID_VIEW: formattedViewId 
-        };
-    });
+    // 2. PREFIX(WOR) + 5자리 숫자 형태로 ID 생성 (예: WOR00005)
+    const WOR_ID_VIEW = `WOR${String(WOR_ID).padStart(5, '0')}`;
+
+    // 3. 생성된 가독성 ID로 테이블 업데이트
+    await execute(conn,
+      `
+            UPDATE T_WORKOUT_RECORD 
+            SET WOR_ID_VIEW = ? 
+            WHERE WOR_ID = ?
+            `,
+      [WOR_ID_VIEW, WOR_ID]
+    );
+
+    // 프라이머리 키(WOR_ID)를 포함하여 결과 리턴
+    return {
+      WOR_ID: WOR_ID,
+      WOR_ID_VIEW: WOR_ID_VIEW
+    };
+  });
 };
 export const insertWorkoutDetail = async (P_DET: T_WORKOUT_DETAIL): Promise<{ WOR_ID: number, WOO_ID: number }> => {
-    return await withTransaction(async (conn) => {
-        
-        // 1. 상세 내역 INSERT
-        await conn.execute(
-            `INSERT INTO T_WORKOUT_DETAIL (
+  return await withTransaction(async (conn) => {
+    console.log('Inserting workout detail:', P_DET);
+    // 1. 상세 내역 INSERT
+    await execute(conn,
+      `
+            INSERT INTO T_WORKOUT_DETAIL (
                 WOR_ID, WOO_ID, WOD_GUIDE, WOD_TARGET_REPS, 
                 WOD_TARGET_SETS, WOD_COUNT, WOD_POINT, WOD_ACCURACY, WOD_TIME
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                P_DET.WOR_ID, 
-                P_DET.WOO_ID, 
-                P_DET.WOD_GUIDE ?? null,
-                P_DET.WOD_TARGET_REPS,
-                P_DET.WOD_TARGET_SETS,
-                P_DET.WOD_COUNT,
-                P_DET.WOD_POINT,
-                P_DET.WOD_ACCURACY,
-                P_DET.WOD_TIME
-            ] as any[]
-        );
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `,
+      [
+        P_DET.WOR_ID,
+        P_DET.WOO_ID,
+        P_DET.WOD_GUIDE ?? null,
+        P_DET.WOD_TARGET_REPS ?? 0,
+        P_DET.WOD_TARGET_SETS ?? 0,
+        P_DET.WOD_COUNT ?? 0,
+        P_DET.WOD_POINT ?? 0,
+        P_DET.WOD_ACCURACY ?? 0,
+        P_DET.WOD_TIME ?? 0
+      ] as any[]
+    );
 
-        // 3. 복합 프라이머리 키 리턴
-        return { 
-            WOR_ID: P_DET.WOR_ID, 
-            WOO_ID: P_DET.WOO_ID 
-        };
-    });
+    // 3. 복합 프라이머리 키 리턴
+    return {
+      WOR_ID: P_DET.WOR_ID,
+      WOO_ID: P_DET.WOO_ID
+    };
+  });
 };
-export const initWorkoutRecord = async (P_REC: T_WORKOUT_RECORD): Promise<{ WOR_ID: number, WOR_ID_VIEW: string }> => {
-    return await withTransaction(async (conn) => {
-        // 1. 날짜 처리: 입력값이 없으면 현재 날짜(YYYY-MM-DD) 사용
-        const recordDate = P_REC.WOR_DT ?? new Date().toISOString().split('T')[0];
-
-        // 2. 기본 정보 INSERT (WOR_ID_VIEW는 임시 빈 값)
-        const [insertResult] = await conn.execute(
-            `INSERT INTO T_WORKOUT_RECORD (WOR_ID_VIEW, MEM_ID, WOR_DT, WOR_DESC) 
-             VALUES (?, ?, ?, ?)`,
+export const initWorkoutRecord = async (P_MEM_ID: number, P_WOR_DT: string): Promise<CurWorkoutRecord> => {
+  return await withTransaction(async (conn) => {
+    let WOR_ID = 0;
+    let WOR_ID_VIEW = "";
+    let LAST_WOR = await getLatestWorkoutId(P_MEM_ID, P_WOR_DT);
+    if (Object.keys(LAST_WOR || {}).length > 0) {
+      WOR_ID = LAST_WOR.WOR_ID;
+      WOR_ID_VIEW = LAST_WOR.WOR_ID_VIEW;
+    }
+    else {
+      const [Result] = await execute(conn,
+        `
+INSERT INTO T_WORKOUT_RECORD (WOR_ID_VIEW, MEM_ID, WOR_DT, WOR_DESC) 
+VALUES (?, ?, ?, ?)
+              `,
+        [
+          '',
+          P_MEM_ID,
+          P_WOR_DT,
+          null
+        ] as any[]
+      );
+      // 생성된 AUTO_INCREMENT ID (PK: WOR_ID) 추출
+      WOR_ID = (Result as any).insertId;
+      // 3. WOR_ID_VIEW 포맷 생성 (PREFIX_ + 5자리 숫자)
+      // 지시사항 규칙: WOR + 5자리 패딩 적용 (예: WOR_00001)
+      WOR_ID_VIEW = `WOR${String(WOR_ID).padStart(5, '0')}`;
+      // 4. 생성된 포맷으로 해당 행 업데이트
+      await execute(conn,
+        `
+UPDATE T_WORKOUT_RECORD SET WOR_ID_VIEW = ? WHERE WOR_ID = ?
+              `,
+        [WOR_ID_VIEW, WOR_ID] as any[]
+      );
+      const workouts = await getWorkouts();
+      console.log('Workouts to initialize:', workouts);
+      const workoutDetails: T_WORKOUT_DETAIL[] = workouts.slice(0, 3).map((record: Workout) => ({
+        WOR_ID: WOR_ID,
+        WOO_ID: record.WOO_ID,
+        WOD_GUIDE: record.WOO_GUIDE,
+        WOD_TARGET_REPS: record.WOO_TARGET_REPS,
+        WOD_TARGET_SETS: record.WOO_TARGET_SETS,
+        WOD_COUNT: 0,
+        WOD_POINT: 0,
+        WOD_ACCURACY: 0,
+        WOD_TIME: 0
+      }));
+      await Promise.all(
+        workoutDetails.map(async (workoutDetail) => {
+          await execute(conn,
+            `
+  INSERT INTO T_WORKOUT_DETAIL (
+      WOR_ID, WOO_ID, WOD_GUIDE, WOD_TARGET_REPS, 
+      WOD_TARGET_SETS, WOD_COUNT, WOD_POINT, WOD_ACCURACY, WOD_TIME
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  `,
             [
-                '', 
-                P_REC.MEM_ID, 
-                recordDate, 
-                P_REC.WOR_DESC
+              workoutDetail.WOR_ID,
+              workoutDetail.WOO_ID,
+              workoutDetail.WOD_GUIDE ?? null,
+              workoutDetail.WOD_TARGET_REPS,
+              workoutDetail.WOD_TARGET_SETS,
+              workoutDetail.WOD_COUNT,
+              workoutDetail.WOD_POINT,
+              workoutDetail.WOD_ACCURACY,
+              workoutDetail.WOD_TIME
             ] as any[]
-        );
-        // 생성된 AUTO_INCREMENT ID (PK: WOR_ID) 추출
-        const newAutoId = (insertResult as any).insertId;
-        // 3. WOR_ID_VIEW 포맷 생성 (PREFIX_ + 5자리 숫자)
-        // 지시사항 규칙: WOR + 5자리 패딩 적용 (예: WOR_00001)
-        const formattedViewId = `WOR${String(newAutoId).padStart(5, '0')}`;
-        // 4. 생성된 포맷으로 해당 행 업데이트
-        await conn.execute(
-            `UPDATE T_WORKOUT_RECORD SET WOR_ID_VIEW = ? WHERE WOR_ID = ?`,
-            [formattedViewId, newAutoId] as any[]
-        );
-        const workouts = await getWorkouts();
-        const workoutDetails: T_WORKOUT_DETAIL[] = workouts.slice(0,3).map((record: Workout) => ({
-          WOR_ID: newAutoId,
-          WOO_ID: record.WOO_ID,
-          WOD_GUIDE: record.WOO_GUIDE,
-          WOD_TARGET_REPS: record.WOO_TARGET_REPS,
-          WOD_TARGET_SETS: record.WOO_TARGET_SETS,
-          WOD_COUNT: 0,
-          WOD_POINT: 0,
-          WOD_ACCURACY: 0,
-          WOD_TIME: 0
-        }));
-        await Promise.all(
-          workoutDetails.map(async (workoutDetail) => {
-            await conn.execute(
-                `INSERT INTO T_WORKOUT_DETAIL (
-                    WOR_ID, WOO_ID, WOD_GUIDE, WOD_TARGET_REPS, 
-                    WOD_TARGET_SETS, WOD_COUNT, WOD_POINT, WOD_ACCURACY, WOD_TIME
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    workoutDetail.WOR_ID, 
-                    workoutDetail.WOO_ID, 
-                    workoutDetail.WOD_GUIDE ?? null,
-                    workoutDetail.WOD_TARGET_REPS,
-                    workoutDetail.WOD_TARGET_SETS,
-                    workoutDetail.WOD_COUNT,
-                    workoutDetail.WOD_POINT,
-                    workoutDetail.WOD_ACCURACY,
-                    workoutDetail.WOD_TIME
-                ] as any[]
-            );
-          })
-        );
-        // 5. 프라이머리 키(WOR_ID)와 생성된 시각적 ID 리턴
-        return { 
-            WOR_ID: newAutoId, 
-            WOR_ID_VIEW: formattedViewId 
-        };
-    });
+          );
+        })
+      );
+    }
+    // 5. 프라이머리 키(WOR_ID)와 생성된 시각적 ID 리턴
+    return {
+      WOR_ID: WOR_ID,
+      WOR_ID_VIEW: WOR_ID_VIEW
+    };
+  });
+};
+export const deleteWorkoutDetails = async (P_WOR_ID: string): Promise<boolean> => {
+  return await withTransaction(async (conn) => {
+    // 1. 상세 내역 DELETE
+    const [Result] = await execute(conn,
+      `
+            DELETE FROM T_WORKOUT_DETAIL 
+            WHERE WOR_ID = ?
+            `,
+      [
+        P_WOR_ID
+      ] as any[]
+    );
+
+    // 3. 복합 프라이머리 키 리턴
+    return Result.affectedRows > 0;
+  });
+};
+
+// 1. 특정 날짜의 운동 계획 조회 (운동 정보 JOIN)
+async function _MemberPlans(P_MEM_ID: number, P_DATE: string): Promise<any[]> {
+  return select(`
+    SELECT  A.MEP_ID,
+            A.MEM_ID,
+            A.WOO_ID,
+            B.WOO_NAME,
+            B.WOO_IMG,
+            A.MEP_TARGET,
+            A.MEP_UNIT,
+            A.MEP_ACHIEVED
+    FROM    T_MEMBER_PLAN A
+    JOIN    T_WORKOUT B ON B.WOO_ID = A.WOO_ID
+    WHERE   A.MEM_ID = ? 
+      AND   A.MEP_DATE = ?
+    ORDER BY A.MEP_ID ASC
+  `, [P_MEM_ID, P_DATE]);
+}
+
+export const MemberPlans = async (P_MEM_ID: number, P_DATE: string): Promise<any[]> => {
+  const records = await _MemberPlans(P_MEM_ID, P_DATE);
+  return records.map((record: any) => ({
+    MEP_ID: record.MEP_ID,
+    MEM_ID: record.MEM_ID,
+    WOO_ID: record.WOO_ID,
+    WOO_NAME: record.WOO_NAME,
+    WOO_IMG: record.WOO_IMG,
+    MEP_TARGET: record.MEP_TARGET,
+    MEP_UNIT: record.MEP_UNIT,
+    MEP_ACHIEVED: record.MEP_ACHIEVED
+  }));
+}
+
+export async function _getPoint(memberId: string, startDate: string, endDate: string): Promise<any[]> {
+  return select(`
+    /* 1. 운동 완료 적립 */
+    (
+      SELECT R.WOR_DT AS WO_DT, W.WOO_IMG AS IMG, D.WOD_ACCURACY AS ACCURACY, 
+             D.WOD_POINT AS POINT, CONCAT(W.WOO_NAME, ' 완료') AS TITLE, 'earned' AS TYPE
+      FROM T_WORKOUT_RECORD R
+      JOIN T_WORKOUT_DETAIL D ON D.WOR_ID = R.WOR_ID
+      JOIN T_WORKOUT W ON W.WOO_ID = D.WOO_ID
+      WHERE R.MEM_ID = ? AND R.WOR_DT BETWEEN ? AND ? AND D.WOD_COUNT > 0
+    )
+    
+    UNION ALL
+
+    /* 2. 업적 달성 보상 적립 섹션 */
+    (
+    SELECT 
+      DATE_FORMAT(B.CMP_DT, '%Y-%m-%d') AS WO_DT, 
+      A.ACH_IMG AS IMG, 
+      0 AS ACCURACY, 
+      A.ACH_REWARD_POINT AS POINT, -- 💡 CASE 문 다 지우고 이 한 줄로 교체!
+      CONCAT(A.ACH_NAME, ' 업적 달성') AS TITLE, 
+      'earned' AS TYPE
+      FROM T_ACHIEVEMENT A
+      JOIN T_MEMBER_ACHIEVEMENT B ON A.ACH_ID = B.ACH_ID
+      WHERE B.MEM_ID = ? AND B.CMP_YN = 'Y' 
+      AND B.CMP_DT BETWEEN STR_TO_DATE(?, '%Y-%m-%d') AND STR_TO_DATE(?, '%Y-%m-%d')
+    )
+
+    UNION ALL
+    
+    /* 3. 회원권 구매 사용 */
+    (
+      SELECT I.INV_DT, '/INVOICE/INVOICE.png', 0, -I.INV_USED_POINT, '회원권 구매', 'used'
+      FROM T_INVOICE I
+      WHERE I.MEM_ID = ? AND I.INV_DT BETWEEN ? AND ? AND I.INV_USED_POINT > 0
+    )
+    
+    ORDER BY WO_DT DESC
+  `, [memberId, startDate, endDate, memberId, startDate, endDate, memberId, startDate, endDate]);
+}
+
+
+
+export const getPoint = async (memberId: string, startDate: string, endDate: string): Promise<PointHistory[]> => {
+  const records = await _getPoint(memberId, startDate, endDate);
+  return records.map((rec: any) => ({
+    wo_dt: rec.WO_DT,
+    img: rec.IMG,
+    accuracy: rec.ACCURACY,
+    point: rec.POINT,
+    title: rec.TITLE,
+    type: rec.TYPE
+  }));
+}
+// db.ts (또는 함수가 정의된 파일)
+
+/**
+ * [업적 목록 조회] 
+ * MySQL 환경에 맞춰 T_ACHIEVEMENT와 T_MEMBER_ACHIEVEMENT를 조인합니다.
+ */
+// db.ts 파일 안에 추가
+export async function getAchievementList(memberId: string): Promise<any[]> {
+  const sql = `
+        SELECT 
+            A.ACH_ID_VIEW AS id, 
+            A.ACH_NAME AS title, 
+            A.ACH_IMG AS icon, 
+            A.ACH_DESC AS description,
+            IFNULL(B.PRG_VAL, 0) AS progress,
+            IFNULL(B.PRG_PCT, 0) AS progressPercentage,
+            CASE 
+                WHEN B.CMP_YN = 'Y' THEN 'completed'
+                WHEN B.PRG_VAL > 0 THEN 'inProgress'
+                ELSE 'locked'
+            END AS status,
+            DATE_FORMAT(B.CMP_DT, '%Y-%m-%d') AS completedDate,
+            A.ACH_REWARD_POINT AS points
+        FROM T_ACHIEVEMENT A
+        LEFT JOIN T_MEMBER_ACHIEVEMENT B 
+               ON A.ACH_ID = B.ACH_ID 
+              AND B.MEM_ID = ?
+        ORDER BY FIELD(status, 'completed', 'inProgress', 'locked'), id ASC
+    `;
+  // 💡 [중요] select 함수를 사용하면 initPool()과 로깅이 자동으로 처리되어 안전합니다.
+  return select(sql, [memberId]);
+}
+
+export const completeAchievementTransaction = async (memberId: string, achievementId: string, rewardPoint: number) => {
+  return await withTransaction(async (conn) => {
+    const updatePointSql = `
+      UPDATE T_MEMBER 
+      SET MEM_POINT = MEM_POINT + ?, 
+          MEM_EXP_POINT = MEM_EXP_POINT + ? 
+      WHERE MEM_ID = ?
+    `;
+    // 💡 [중요] execute 공통 함수를 사용하여 쿼리를 실행합니다.
+    await execute(conn, updatePointSql, [rewardPoint, rewardPoint, memberId]);
+  });
 };
 
 
 
+// 2. 새로운 운동 계획 추가
+export const addMemberPlan = async (plan: {
+  MEM_ID: number;
+  WOO_ID: string;
+  MEP_DATE: string;
+  MEP_TARGET: number;
+  MEP_UNIT: string;
+}): Promise<void> => {
+  await withTransaction(async (conn) => {
+    const [result] = await execute(conn,
+      `
+      INSERT INTO T_MEMBER_PLAN (MEM_ID, WOO_ID, MEP_DATE, MEP_TARGET, MEP_UNIT)
+      VALUES (?, ?, ?, ?, ?)
+        `,
+      [
+        plan.MEM_ID,
+        plan.WOO_ID,
+        plan.MEP_DATE,
+        plan.MEP_TARGET,
+        plan.MEP_UNIT
+      ] as any[]
+    );        // 3. 복합 프라이머리 키 리턴
+  });
+}
+
+// 3. 운동 계획 삭제
+export const deleteMemberPlan = async (P_MEP_ID: number): Promise<void> => {
+  await withTransaction(async (conn) => {
+    const [result] = await execute(conn,
+      `
+      DELETE FROM T_MEMBER_PLAN WHERE MEP_ID = ?
+        `,
+      [
+        P_MEP_ID
+      ] as any[]
+    );        // 3. 복합 프라이머리 키 리턴
+  });
+}
+
+// 월간 운동 요약 정보 조회
+export const getMonthStatus = async (P_MEM_ID: number, P_MONTH: string): Promise<any[]> => {
+  return select(`
+    SELECT 
+      MEP_DATE,
+      COUNT(*) as TOTAL_COUNT,
+      SUM(CASE WHEN MEP_ACHIEVED = 'Y' THEN 1 ELSE 0 END) as DONE_COUNT
+    FROM T_MEMBER_PLAN
+    WHERE MEM_ID = ? AND MEP_DATE LIKE ?
+    GROUP BY MEP_DATE
+  `, [P_MEM_ID, `${P_MONTH}%`]);
+}
 // =================================================================================================================
 // 오라클 버전 
 // =================================================================================================================
@@ -733,15 +1087,15 @@ END;
 // 4. Column Description 조회
 export const getColDescs = async (tableName: string): Promise<ColDesc[]> => {
   const colDescs = await _getColDescs(tableName);
-  return colDescs.map((col: any) => ({      
+  return colDescs.map((col: any) => ({
     id: col.ID,
-    title: col.TITLE,     
+    title: col.TITLE,
     type: col.TYPE,
     width: col.WIDTH,
     summary: col.SUMMARY,
     aggregate: 0
   }));
-} 
+}
 // 5. 운동내역 조회
 export const getWorkoutRecords = async (memberId: string, from: string, to: string): Promise<WorkoutRecord[]> => {
   const records = await _getWorkoutRecords(memberId, from, to);

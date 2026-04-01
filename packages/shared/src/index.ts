@@ -38,7 +38,7 @@ export interface ColDesc {
   회원정보
 =======================================================================================================*/
 export interface Member {
-    MEM_ID: string;
+    MEM_ID: number;
     MEM_ID_VIEW: string;
     MEM_NAME: string;
     MEM_NICKNAME: string;
@@ -50,7 +50,8 @@ export interface Member {
     MEM_POINT: number;
     MEM_EXP_POINT: number;   //
     MEM_LVL: number;         //
-    MES_ID : string;
+    MEM_STREAK: number;    
+    MES_ID : number;
     MES_NAME: string;
     MES_FEE: number;
 }
@@ -64,7 +65,7 @@ export interface Benefit {
   BEN_NAME: string;
 }
 export interface Membership {
-  MES_ID: string;
+  MES_ID: number;
   MES_NAME: string;
   MES_FEE: number;
   MES_BENEFITS: Benefit[];
@@ -99,6 +100,11 @@ export interface WorkoutDetail {
   WOD_TARGET_REPS: number;
   WOD_TARGET_SETS: number;
 }
+export interface CurWorkoutRecord 
+{
+  WOR_ID: number;
+  WOR_ID_VIEW: string;
+}
 export interface Workout {
   WOO_ID: number;
   WOO_NAME: string;
@@ -107,6 +113,23 @@ export interface Workout {
   WOO_GUIDE: string;
   WOO_TARGET_REPS: number;
   WOO_TARGET_SETS: number;
+}
+export interface RankingItem {
+  RANK: number;
+  MEM_ID: number;
+  MEM_NAME: string;
+  MEM_IMG: string;
+  CNT: number;
+  WORKOUT_TIME: number;
+}
+export interface Goods 
+{
+  GOD_ID: number;   // PK (AUTO_INCREMENT)
+  GOD_ID_VIEW : string;   // varchar(8)
+  GOD_NAME    : string;   // varchar(50)
+  GOD_PRICE   : number;   // int
+  GOD_DCRATE  : number;   // int
+  GOD_IMG     : string | null;  // varchar(256), nullable
 }
 /*=======================================================================================================
   등록 관련
@@ -125,6 +148,7 @@ export interface T_MEMBER {
     MEM_POINT: number;
     MEM_EXP_POINT: number;
     MEM_LVL: number;
+    MEM_STREAK: number;
     MES_ID: number;           // 등급 코드 (FK)
 }
 export interface T_WORKOUT_RECORD {
@@ -144,6 +168,14 @@ export interface T_WORKOUT_DETAIL {
     WOD_POINT: number;        // 획득 포인트
     WOD_ACCURACY: number;     // 운동 정확도
     WOD_TIME: number;         // 운동시간(분)
+}
+export interface PointHistory {
+  wo_dt: Date | string; // MySQL DATE 타입은 환경에 따라 문자열로 올 수도 있어 유연하게 지정
+  img: string;
+  accuracy: number;
+  point: number;
+  title: string;
+  type: 'earned' | 'used'; // 타입을 명확히 제한하면 개발 시 자동완성 도움을 받기 좋습니다.
 }
 /*=======================================================================================================
   메뉴 관련
