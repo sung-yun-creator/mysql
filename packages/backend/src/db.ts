@@ -743,7 +743,7 @@ UPDATE T_WORKOUT_RECORD SET WOR_ID_VIEW = ? WHERE WOR_ID = ?
       );
       const workouts = await getWorkouts();
       console.log('Workouts to initialize:', workouts);
-      const workoutDetails: T_WORKOUT_DETAIL[] = workouts.slice(0, 3).map((record: Workout) => ({
+      const workoutDetails: T_WORKOUT_DETAIL[] = workouts.slice(0, 4).map((record: Workout) => ({
         WOR_ID: WOR_ID,
         WOO_ID: record.WOO_ID,
         WOD_GUIDE: record.WOO_GUIDE,
@@ -936,6 +936,10 @@ export const completeAchievementTransaction = async (memberId: string, achieveme
     await execute(conn, updatePointSql, [rewardPoint, rewardPoint, memberId]);
   });
 };
+
+
+
+
 
 
 
@@ -1139,3 +1143,44 @@ export const getWorkoutPivotWithPlan = async (memberId: string, from: string, to
 // 10. 회원정보 조회
 
 // 12. 회원정보 검증
+// =================================================================================================================
+// 🌟 [추가] 운동 완료 시 데이터 및 포인트 저장 로직 (FastAPI 연동 최종)
+// =================================================================================================================
+export const completeWorkoutRecord = async (
+  mem_id: number, 
+  wor_id: number, 
+  count: number, 
+  duration: number, 
+  accuracy: number,
+  woo_id: number // 🔥 파라미터 추가!
+): Promise<number> => {
+  return await withTransaction(async (conn) => {
+    const earnedPoint = 50 + (count * 10) + (duration * 1);
+
+    // 💡 1. 디테일 업데이트 (WOR_ID와 WOO_ID를 둘 다 명시!)
+    const updateDetailSql = `
+        UPDATE T_WORKOUT_DETAIL
+        SET WOD_COUNT = ?, WOD_ACCURACY = ?, WOD_POINT = ?
+        WHERE WOR_ID = ? AND WOO_ID = ?
+    `;
+    await execute(conn, updateDetailSql, [count, accuracy, earnedPoint, wor_id, woo_id]);
+
+    // 💡 2. 레코드 상태를 'C'(완료)로 변경
+    const updateRecordSql = `
+        UPDATE T_WORKOUT_RECORD
+        SET WOR_STATUS = 'C'
+        WHERE WOR_ID = ?
+    `;
+    await execute(conn, updateRecordSql, [wor_id]);
+
+    // 💡 3. 회원 포인트 업데이트
+    const updateMemberSql = `
+        UPDATE T_MEMBER
+        SET MEM_POINT = MEM_POINT + ?
+        WHERE MEM_ID = ?
+    `;
+    await execute(conn, updateMemberSql, [earnedPoint, mem_id]);
+
+    return earnedPoint;
+  });
+};
