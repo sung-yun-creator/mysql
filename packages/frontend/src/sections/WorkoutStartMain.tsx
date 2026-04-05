@@ -32,6 +32,8 @@ const WorkoutStartMain: React.FC<{ wor_id: string | null }> = ({ wor_id }) => {
   const isApiProcessing = useRef<boolean>(false);
   const currentAiExerciseRef = useRef<string>("");
   const statusRef = useRef<'up' | 'down'>('up'); // 💡 빠른 웹캠 속도를 따라가기 위한 카운트 상태 주머니
+  // 🌟 [여기 추가!] 확률을 실시간으로 저장할 주머니
+  const currentAiProbRef = useRef<number>(0);
 
   // 화면 표시용 상태 관리 (State)
   const [isDetecting, setIsDetecting] = useState(false);
@@ -45,7 +47,8 @@ const WorkoutStartMain: React.FC<{ wor_id: string | null }> = ({ wor_id }) => {
   const [realWorId, setRealWorId] = useState<string | null>(wor_id);
   const [isFinished, setIsFinished] = useState(false); // 🌟 운동 완료 여부
   const [earnedPoint, setEarnedPoint] = useState(0);   // 🌟 방금 획득한 포인트
-  // const [accList, setAccList] = useState<number[]>([]);
+  const [accList, setAccList] = useState<number[]>([]); // 🌟 주석 해제! (정확도 모음집)
+  const lowestAngleRef = useRef<number>(180); // 🌟 [추가] 운동 중 가장 깊이 내려간 각도를 기억할 주머니 (기본값은 서 있는 180도)
 
   // 1. Pose Landmarker 초기화
   const initializePoseLandmarker = async () => {
@@ -87,7 +90,7 @@ const WorkoutStartMain: React.FC<{ wor_id: string | null }> = ({ wor_id }) => {
     }
   }, [isDetecting, isPlankActive]); // status 의존성 제거 (주머니 사용)
 
-  // 4. FastAPI로 좌표 쏘는 함수
+  // 4. FastAPI로 좌표 쏘는 함수 
   const callAiServer = async (landmarks: any[]) => {
     if (isApiProcessing.current) return;
     isApiProcessing.current = true;
@@ -114,6 +117,7 @@ const WorkoutStartMain: React.FC<{ wor_id: string | null }> = ({ wor_id }) => {
 
         // 💡 AI가 판별한 운동을 몰래 주머니에 저장! (실시간 연동용)
         currentAiExerciseRef.current = data.exercise;
+        currentAiProbRef.current = data.probability; // 🌟 이거 추가!
 
         setIsPlankActive(data.exercise.toLowerCase() === 'plank');
       }
@@ -142,28 +146,51 @@ const WorkoutStartMain: React.FC<{ wor_id: string | null }> = ({ wor_id }) => {
 
     // 💡 State 대신 주머니(Ref)에 있는 최신 운동값을 가져와서 비교합니다!
     const aiResult = currentAiExerciseRef.current.toLowerCase();
+    const aiProb = currentAiProbRef.current; // 🌟 [수정] 주머니에서 최신 확률 꺼내오기!
 
-    // 카운트 인식 각도 완화 (살짝만 굽혀도 인정!)
-    if (aiResult === 'pushup') {
-      handleCount(armAngle, 100, 140);
-    }
-    else if (aiResult === 'squat' || aiResult === 'lunge') {
-      handleCount(legAngle, 120, 150); // 무릎 120도 이하로 굽히면 DOWN, 150도 이상 펴면 UP
+    // 🌟 [수정] 커트라인을 40으로 낮추고, 최신 확률(aiProb)과 비교!
+    if (aiProb > 40) {
+      if (aiResult === 'pushup') {
+        handleCount(armAngle, 100, 140);
+      }
+      else if (aiResult === 'squat' || aiResult === 'lunge') {
+        handleCount(legAngle, 120, 150);
+      }
     }
   };
-
   const handleCount = (angle: number, downLimit: number, upLimit: number) => {
     // 💡 빠른 속도를 위해 비교는 주머니(Ref)로 하고, 표시는 State로 합니다.
     if (angle < downLimit) {
       statusRef.current = 'down';
       setStatus('down');
+
+      // 🌟 [추가] 내려가고 있는 동안, 가장 팍 꺾인(낮은) 각도를 계속 갱신하며 기억합니다.
+      lowestAngleRef.current = Math.min(lowestAngleRef.current, angle);
+
     } else if (angle > upLimit && statusRef.current === 'down') {
       statusRef.current = 'up';
       setStatus('up');
       setCount(prev => prev + 1); // 🔥 여기서 카운트 증가!
+
+
+      // 🌟 [진짜 정확도 계산 로직]
+      // 스쿼트 기준: 90도까지 내려가면 100점, 140도까지만 내려가면 0점(또는 기본점수)으로 환산하는 공식
+      // (90도와 140도 사이를 0~100점으로 스케일링)
+      let realScore = 100;
+      const lowest = lowestAngleRef.current;
+
+      if (lowest > 90) {
+        // 90도보다 덜 내려갔으면 점수 깎기 (1도 덜 내려갈 때마다 2점씩 감점)
+        realScore = Math.max(30, 100 - (lowest - 90) * 2); // 아무리 못해도 기본 30점은 줌
+      }
+
+      // 방금 계산한 '진짜 물리적 자세 점수'를 저장! (AI 확률은 버립니다)
+      setAccList(prev => [...prev, realScore]);
+
+      // 🌟 [초기화] 다음 횟수를 위해 최저 각도 기억을 다시 180도로 리셋
+      lowestAngleRef.current = 180;
     }
   };
-
   // 플랭크 타이머 처리
   useEffect(() => {
     if (isPlankActive && isDetecting) {
@@ -181,6 +208,9 @@ const WorkoutStartMain: React.FC<{ wor_id: string | null }> = ({ wor_id }) => {
     setPlankTime(0);
     statusRef.current = 'up'; // 주머니 초기화
     setStatus('up');
+    // 🌟 [추가] 새 운동을 시작할 때, 이전 점수와 각도 기억을 깨끗하게 지워줍니다!
+    setAccList([]); 
+    lowestAngleRef.current = 180;
   };
 
   const stopDetection = () => {
@@ -247,16 +277,22 @@ const WorkoutStartMain: React.FC<{ wor_id: string | null }> = ({ wor_id }) => {
     else if (aiEx === 'pushup') targetWooId = 3;
     else if (aiEx === 'lunge') targetWooId = 4;
 
-    // 💡 2. payload에 woo_id 추가해서 포장!
+    // 🌟 [보강] 쌓인 정확도 리스트의 평균을 계산! (데이터가 없으면 0)
+    const finalAccuracy = accList.length > 0
+      ? Math.floor(accList.reduce((a, b) => a + b, 0) / accList.length)
+      : 0;
+
+
+
+    // 💡 2. payload에 진짜 점수 넣어서 포장!
     const payload = {
       mem_id: member?.MEM_ID,
       wor_id: realWorId,
-      woo_id: targetWooId, // 🔥 추가된 핵심 데이터! (몇 번 운동인지)
+      woo_id: targetWooId,
       count: count,
       duration: plankTime,
-      accuracy: Math.floor(Math.random() * 11) + 90
+      accuracy: finalAccuracy // 🔥 랜덤값 아웃! 진짜 내 실력 점수 투입!
     };
-
     try {
       const res = await fetch('http://localhost:3001/api/workout/complete', {
         method: 'POST',
@@ -319,6 +355,21 @@ const WorkoutStartMain: React.FC<{ wor_id: string | null }> = ({ wor_id }) => {
               videoConstraints={{ width: 640, height: 480, facingMode: "user" }}
             />
             <canvas ref={canvasRef} width={640} height={480} className="absolute inset-0 w-full h-full z-10" style={{ transform: 'scaleX(-1)' }} />
+
+            {/* 🌟 [추가] 사용자 자세 유도용 가이드라인 박스 */}
+            <div className="absolute inset-0 z-15 pointer-events-none flex flex-col items-center justify-center pb-8">
+              {/* 반투명 점선 네모 박스 */}
+              <div className={`w-[500px] h-[400px] mt-10 border-4 border-dashed rounded-3xl transition-all duration-500 ${
+                isDetecting ? 'border-white/20' : 'border-emerald-400/70'
+              }`}></div>
+              
+              {/* 안내 문구 (운동 시작 전이나 AI가 사람을 못 찾았을 때만 뚜렷하게 보임) */}
+              <div className={`mt-4 px-4 py-2 rounded-full bg-black/60 backdrop-blur-sm text-white font-bold text-sm transition-opacity duration-500 ${
+                (!isDetecting || currentExercise === "사람을 감지할 수 없습니다") ? 'opacity-100' : 'opacity-0'
+              }`}>
+                📷 몸이 네모 박스 안에 들어오도록 자리를 잡아주세요
+              </div>
+            </div>
 
             {/* 🌟 [추가] 운동 완료 시 나타나는 결과 창 */}
             {isFinished && (
@@ -386,3 +437,4 @@ const WorkoutStartMain: React.FC<{ wor_id: string | null }> = ({ wor_id }) => {
 };
 
 export default WorkoutStartMain;
+
